@@ -1,0 +1,5 @@
+{
+  "name": "Bilbao POS",
+  "description": "A coffee shop management app with POS, dashboard, staff, and table management.",
+  "requestFramePermissions": []
+}
