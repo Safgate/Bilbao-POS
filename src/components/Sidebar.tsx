@@ -1,5 +1,5 @@
 import React from 'react';
-import { Coffee, LayoutDashboard, Menu as MenuIcon, Users, Grid, LogOut, User, Settings, FileText } from 'lucide-react';
+import { Coffee, LayoutDashboard, Menu as MenuIcon, Users, Grid, LogOut, User, Settings, FileText, PanelLeftClose } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { useAppStore } from '../store';
@@ -14,9 +14,10 @@ export function cn(...inputs: ClassValue[]) {
 interface SidebarProps {
   currentTab: string;
   setCurrentTab: (tab: string) => void;
+  onCollapse?: () => void;
 }
 
-export const Sidebar: React.FC<SidebarProps> = ({ currentTab, setCurrentTab }) => {
+export const Sidebar: React.FC<SidebarProps> = ({ currentTab, setCurrentTab, onCollapse }) => {
   const { currentUser, setCurrentUser, settings, realtimeConnected } = useAppStore();
   const lang = settings.language;
   const logoUrl = settings.logoUrl ? (settings.logoUrl.startsWith('http') || settings.logoUrl.startsWith('data:') ? settings.logoUrl : getApiBaseUrl() + settings.logoUrl) : null;
@@ -37,15 +38,26 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, setCurrentTab }) =
 
   return (
     <div className="bg-zinc-900 text-zinc-300 flex flex-col w-full md:w-64 md:h-full border-b md:border-b-0 md:border-r border-zinc-800">
-      <div className="p-6 flex items-center gap-3 border-b border-zinc-800">
-        {logoUrl ? (
-          <img
-            src={logoUrl}
-            alt="Bilbao logo"
-            className="w-8 h-8 rounded-lg object-contain bg-white"
-          />
-        ) : (
-          <BilbaoLogo />
+      <div className="p-6 flex items-center justify-between border-b border-zinc-800">
+        <div className="flex items-center gap-3">
+          {logoUrl ? (
+            <img
+              src={logoUrl}
+              alt="Bilbao logo"
+              className="w-8 h-8 rounded-lg object-contain bg-white"
+            />
+          ) : (
+            <BilbaoLogo />
+          )}
+        </div>
+        {onCollapse && (
+          <button
+            onClick={onCollapse}
+            className="p-1.5 text-zinc-400 hover:text-white hover:bg-zinc-800 rounded-lg transition-colors"
+            title="Collapse sidebar"
+          >
+            <PanelLeftClose size={18} />
+          </button>
         )}
       </div>
       <nav className="flex-1 p-4 space-y-2">

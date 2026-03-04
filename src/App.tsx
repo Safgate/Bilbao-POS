@@ -14,33 +14,61 @@ import { Staff } from './pages/Staff';
 import { Settings } from './pages/Settings';
 import { Reports } from './pages/Reports';
 import { Login } from './pages/Login';
+import { PanelLeftOpen } from 'lucide-react';
 
 const MainApp = () => {
   const { currentUser, settings } = useAppStore();
   const [currentTab, setCurrentTab] = useState('pos');
+  const [sidebarOpen, setSidebarOpen] = useState(true);
 
+  const isManagerOrAdmin =
+    currentUser?.role === 'Manager' || currentUser?.role === 'Admin';
+
+  // Reset tab and sidebar visibility whenever the logged-in user changes
   React.useEffect(() => {
     if (currentUser) {
       setCurrentTab('pos');
+      // Waiters/staff: sidebar always hidden; managers: open by default
+      setSidebarOpen(isManagerOrAdmin);
     }
-  }, [currentUser]);
+  }, [currentUser?.id]);
 
   React.useEffect(() => {
     const root = document.documentElement;
     root.setAttribute('dir', settings.language === 'ar' ? 'rtl' : 'ltr');
-    root.setAttribute('lang', settings.language === 'ar' ? 'ar' : settings.language === 'fr' ? 'fr' : 'en');
+    root.setAttribute('lang',
+      settings.language === 'ar' ? 'ar' : settings.language === 'fr' ? 'fr' : 'en');
   }, [settings.language]);
 
   if (!currentUser) {
     return <Login />;
   }
 
-  const isManagerOrAdmin = currentUser.role === 'Manager' || currentUser.role === 'Admin';
+  const showSidebar = isManagerOrAdmin && sidebarOpen;
 
   return (
     <div className="flex h-screen bg-zinc-100 font-sans overflow-hidden flex-col md:flex-row">
-      <Sidebar currentTab={currentTab} setCurrentTab={setCurrentTab} />
-      <main className="flex-1 overflow-y-auto">
+      {/* Sidebar — only rendered for managers, and only when open */}
+      {showSidebar && (
+        <Sidebar
+          currentTab={currentTab}
+          setCurrentTab={setCurrentTab}
+          onCollapse={() => setSidebarOpen(false)}
+        />
+      )}
+
+      <main className="flex-1 overflow-y-auto relative">
+        {/* Re-open button — visible only for managers when sidebar is collapsed */}
+        {isManagerOrAdmin && !sidebarOpen && (
+          <button
+            onClick={() => setSidebarOpen(true)}
+            className="absolute top-4 left-4 z-20 p-2 bg-zinc-900 hover:bg-zinc-700 text-white rounded-xl shadow-lg transition-colors"
+            title="Open navigation"
+          >
+            <PanelLeftOpen size={20} />
+          </button>
+        )}
+
         {currentTab === 'pos' && <POS />}
         {currentTab === 'dashboard' && isManagerOrAdmin && <Dashboard />}
         {currentTab === 'menu' && isManagerOrAdmin && <Menu />}

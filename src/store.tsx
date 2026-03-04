@@ -1,18 +1,21 @@
-import React, { createContext, useContext, useEffect, useState, ReactNode } from 'react';
+import React, { createContext, useContext, useEffect, useRef, useState, ReactNode } from 'react';
 import { Category, MenuItem, Table, Order, Staff, Shift } from './types';
-import { apiFetch, createAppWebSocket } from './api';
+import { apiFetch, createAppWebSocket, getApiBaseUrl } from './api';
 import type { Lang } from './i18n';
+import { printReceipt } from './utils/print';
 
 export interface AppSettings {
   language: Lang;
   printer: string;
   logoUrl: string;
+  autoPrintMobile: boolean;
 }
 
 const defaultSettings: AppSettings = {
   language: 'en',
   printer: '',
   logoUrl: '',
+  autoPrintMobile: true,
 };
 
 interface AppState {
@@ -43,7 +46,11 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
   const [shifts, setShifts] = useState<Shift[]>([]);
   const [currentUser, setCurrentUser] = useState<Staff | null>(null);
   const [settings, setSettingsState] = useState<AppSettings>(defaultSettings);
+  const settingsRef = useRef<AppSettings>(defaultSettings);
   const [realtimeConnected, setRealtimeConnected] = useState(false);
+
+  // Keep a ref in sync so the WS callback always sees fresh settings
+  useEffect(() => { settingsRef.current = settings; }, [settings]);
 
   const fetchSettings = async () => {
     try {
@@ -53,6 +60,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
         language: (raw.language as Lang) || 'en',
         printer: raw.printer || '',
         logoUrl: raw.logo_url || '',
+        autoPrintMobile: raw.auto_print_mobile !== 'false',
       });
     } catch {
       setSettingsState(defaultSettings);
@@ -69,6 +77,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
         language: next.language,
         printer: next.printer,
         logo_url: next.logoUrl || undefined,
+        auto_print_mobile: String(next.autoPrintMobile),
       }),
     });
   };
@@ -161,6 +170,23 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
           case 'settings_updated':
             fetchSettings();
             break;
+          case 'new_order': {
+            // Auto-print receipt for orders placed from mobile devices
+            const s = settingsRef.current;
+            if (s.autoPrintMobile && data.payload) {
+              const logoUrl = s.logoUrl
+                ? (s.logoUrl.startsWith('http') || s.logoUrl.startsWith('data:')
+                    ? s.logoUrl
+                    : getApiBaseUrl() + s.logoUrl)
+                : undefined;
+              printReceipt(data.payload, {
+                printerName: s.printer || undefined,
+                logoUrl,
+              });
+            }
+            fetchActiveOrders();
+            break;
+          }
         }
       };
     };

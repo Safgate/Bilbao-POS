@@ -25,4 +25,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   ) => {
     return await ipcRenderer.invoke('pos:print-receipt', { html, options });
   },
+  getLocalIp: async (): Promise<string> => {
+    return await ipcRenderer.invoke('pos:get-local-ip');
+  },
 });

@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useAppStore } from '../store';
 import { Lock, User } from 'lucide-react';
 import { t } from '../i18n';
+import { apiFetch } from '../api';
 
 export const Login: React.FC = () => {
   const { staff, setCurrentUser, settings } = useAppStore();
@@ -10,10 +11,10 @@ export const Login: React.FC = () => {
   const [pin, setPin] = useState('');
   const [error, setError] = useState('');
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-    
+
     if (!selectedStaffId) {
       setError(t(lang, 'login.errorUser'));
       return;
@@ -26,6 +27,12 @@ export const Login: React.FC = () => {
     }
 
     if (user.pin === pin) {
+      // Auto-open shift on login (idempotent — won't duplicate an already-open shift)
+      apiFetch('/api/shifts/open', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ staff_id: user.id }),
+      }).catch(() => {});
       setCurrentUser(user);
     } else {
       setError(t(lang, 'login.errorPin'));

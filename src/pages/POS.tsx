@@ -1,10 +1,10 @@
 import React, { useMemo, useState } from 'react';
 import { useAppStore } from '../store';
 import { MenuItem, OrderItem, Table } from '../types';
-import { apiFetch } from '../api';
-import { getApiBaseUrl } from '../api';
+import { apiFetch, getApiBaseUrl } from '../api';
 import { ShoppingCart, Plus, Minus, Trash2, CheckCircle, XCircle, Coffee } from 'lucide-react';
 import { t } from '../i18n';
+import { printReceipt } from '../utils/print';
 
 export const POS: React.FC = () => {
   const { categories, menuItems, tables, activeOrders, settings } = useAppStore();
@@ -46,81 +46,19 @@ export const POS: React.FC = () => {
 
   const cartTotal = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
 
-  const printReceipt = (orderData: any, orderNumber: number) => {
-    const tableName = selectedTable 
-      ? tables.find(t => t.id === selectedTable)?.name 
+  const handlePrintReceipt = (orderData: any, orderId: number) => {
+    const tableName = selectedTable
+      ? tables.find(t => t.id === selectedTable)?.name
       : 'Takeaway';
-
-    const date = new Date().toLocaleString();
-
-    const html = `
-      <html>
-        <head>
-          <title>Receipt</title>
-          <style>
-            * { box-sizing: border-box; }
-            body { font-family: monospace; margin: 0; padding: 4px 8px; width: 240px; }
-            @page { margin: 0; size: auto; }
-            .text-center { text-align: center; }
-            .text-right { text-align: right; }
-            .mb-2 { margin-bottom: 8px; }
-            .mb-4 { margin-bottom: 16px; }
-            .flex { display: flex; justify-content: space-between; }
-            .border-b { border-bottom: 1px dashed #000; padding-bottom: 8px; margin-bottom: 8px; }
-            .bold { font-weight: bold; }
-          </style>
-        </head>
-        <body>
-          <div class="text-center mb-4">
-            ${receiptLogoUrl ? `<img src="${receiptLogoUrl}" alt="" style="max-width: 120px; max-height: 48px; object-fit: contain; margin-bottom: 8px;" />` : ''}
-            <h2 style="margin: 0;">Bilbao Coffee</h2>
-            <div>123 Coffee Street</div>
-            <div>Order #${orderNumber}</div>
-            <div>${date}</div>
-            <div class="bold" style="margin-top: 8px;">${tableName}</div>
-          </div>
-          
-          <div class="border-b">
-            ${orderData.items.map((item: any) => `
-              <div class="flex mb-2">
-                <div>${item.quantity}x ${item.name}</div>
-                <div>${(item.price * item.quantity).toFixed(2)} DH</div>
-              </div>
-            `).join('')}
-          </div>
-          
-          <div class="flex bold border-b">
-            <div>TOTAL</div>
-            <div>${orderData.total.toFixed(2)} DH</div>
-          </div>
-          
-          <div class="text-center" style="margin-top: 24px;">
-            Thank you for your visit!
-          </div>
-        </body>
-      </html>
-    `;
-
-    // Prefer Electron main-process printing (reliable, no popups).
-    if (window.electronAPI?.printReceipt) {
-      const deviceName = settings.printer || undefined;
-      window.electronAPI.printReceipt(html, { silent: true, deviceName, copies: 1 }).then((result) => {
-        if (!result?.success) {
-          console.error('Print failed', result?.error);
-        }
-      });
-      return;
-    }
-
-    // Fallback for web/dev mode.
-    const receiptWindow = window.open('', '_blank', 'width=400,height=600');
-    if (!receiptWindow) return;
-    receiptWindow.document.write(html);
-    receiptWindow.document.close();
-    receiptWindow.onload = () => {
-      receiptWindow.print();
-      setTimeout(() => receiptWindow.close(), 500);
-    };
+    printReceipt(
+      {
+        id: orderId,
+        table_name: tableName,
+        items: orderData.items.map((i: any) => ({ name: i.name, quantity: i.quantity, price: i.price })),
+        total: orderData.total,
+      },
+      { printerName: settings.printer || undefined, logoUrl: receiptLogoUrl || undefined }
+    );
   };
 
   const placeOrder = async () => {
@@ -139,8 +77,8 @@ export const POS: React.FC = () => {
       
       const data = await res.json();
       
-      // Print receipt
-      printReceipt({ items: cart, total: cartTotal }, data.id);
+      // Print receipt (mark source=pos so the store doesn't double-print it)
+      handlePrintReceipt({ items: cart, total: cartTotal }, data.id);
 
       setCart([]);
       setSelectedTable(null);
@@ -209,7 +147,12 @@ export const POS: React.FC = () => {
               >
                 <div className="w-24 h-24 rounded-full overflow-hidden mb-4 bg-zinc-100">
                   {item.image_url ? (
-                    <img src={item.image_url} alt={item.name} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-300" referrerPolicy="no-referrer" />
+                    <img
+                      src={item.image_url.startsWith('http') || item.image_url.startsWith('data:') ? item.image_url : getApiBaseUrl() + item.image_url}
+                      alt={item.name}
+                      className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-300"
+                      referrerPolicy="no-referrer"
+                    />
                   ) : (
                     <div className="w-full h-full flex items-center justify-center text-zinc-400">
                       <Coffee size={32} />

@@ -1,20 +1,21 @@
 {
   "name": "bilbao-pos",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.1.0",
   "type": "module",
   "main": "dist-electron/main.js",
   "author": "Bilbao POS",
   "description": "Point of Sale Application",
   "scripts": {
     "dev": "vite",
-    "build": "vite build && electron-builder",
-    "build:dir": "vite build && electron-builder --dir",
+    "build:mobile": "cd mobile && npm run build",
+    "build": "npm run build:mobile && vite build && electron-builder",
+    "build:dir": "npm run build:mobile && vite build && electron-builder --dir",
     "preview": "vite preview",
     "clean": "rm -rf dist dist-electron",
     "lint": "tsc --noEmit",
     "electron:dev": "vite",
-    "electron:build": "vite build && electron-builder"
+    "electron:build": "npm run build:mobile && vite build && electron-builder"
   },
   "dependencies": {
     "@google/genai": "^1.29.0",
@@ -28,6 +29,7 @@
     "jspdf": "^4.2.0",
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
+    "qrcode.react": "^4.2.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "recharts": "^3.7.0",

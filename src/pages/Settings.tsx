@@ -2,8 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { useAppStore } from '../store';
 import { t } from '../i18n';
 import type { Lang } from '../i18n';
-import { Settings as SettingsIcon, Lock, Globe, Printer, Image, Save } from 'lucide-react';
+import { Settings as SettingsIcon, Lock, Globe, Printer, Image, Smartphone, Copy, Check, BellRing } from 'lucide-react';
 import { apiFetch, getApiBaseUrl } from '../api';
+import { QRCodeSVG } from 'qrcode.react';
 
 export const Settings: React.FC = () => {
   const { settings, setSettings, staff, fetchSettings } = useAppStore();
@@ -12,12 +13,32 @@ export const Settings: React.FC = () => {
   const [printers, setPrinters] = useState<Array<{ name: string; displayName?: string }>>([]);
   const [logoFile, setLogoFile] = useState<File | null>(null);
   const [saving, setSaving] = useState(false);
+  const [localIp, setLocalIp] = useState<string>('');
+  const [copied, setCopied] = useState(false);
 
   const lang = settings.language;
+  const mobileUrl = localIp ? `http://${localIp}:3000/mobile` : '';
 
   useEffect(() => {
     fetchSettings();
   }, [fetchSettings]);
+
+  useEffect(() => {
+    const fetchIp = async () => {
+      if (window.electronAPI?.getLocalIp) {
+        const ip = await window.electronAPI.getLocalIp();
+        setLocalIp(ip);
+      }
+    };
+    fetchIp();
+  }, []);
+
+  const handleCopyUrl = () => {
+    if (!mobileUrl) return;
+    navigator.clipboard.writeText(mobileUrl);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
 
   useEffect(() => {
     const loadPrinters = async () => {
@@ -161,6 +182,99 @@ export const Settings: React.FC = () => {
             </span>
           </label>
         </div>
+      </div>
+
+      {/* Auto-print mobile orders */}
+      <div className="bg-white p-6 rounded-2xl shadow-sm border border-zinc-100">
+        <h2 className="text-lg font-bold text-zinc-900 mb-2 flex items-center gap-2">
+          <BellRing size={20} className="text-emerald-600" />
+          Mobile Order Printing
+        </h2>
+        <p className="text-sm text-zinc-500 mb-4">
+          Automatically print a receipt on this desktop whenever an order is placed from a mobile device.
+        </p>
+        <label className="flex items-center gap-3 cursor-pointer select-none">
+          <div
+            onClick={() => setSettings({ autoPrintMobile: !settings.autoPrintMobile })}
+            className={`relative w-12 h-6 rounded-full transition-colors ${settings.autoPrintMobile ? 'bg-emerald-500' : 'bg-zinc-300'}`}
+          >
+            <span className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow transition-transform ${settings.autoPrintMobile ? 'translate-x-7' : 'translate-x-1'}`} />
+          </div>
+          <span className="font-medium text-zinc-700">
+            {settings.autoPrintMobile ? 'Auto-print enabled' : 'Auto-print disabled'}
+          </span>
+        </label>
+      </div>
+
+      {/* Mobile Access */}
+      <div className="bg-white p-6 rounded-2xl shadow-sm border border-zinc-100">
+        <h2 className="text-lg font-bold text-zinc-900 mb-2 flex items-center gap-2">
+          <Smartphone size={20} className="text-emerald-600" />
+          Mobile Access
+        </h2>
+        <p className="text-sm text-zinc-500 mb-4">
+          Scan the QR code or open the URL on any phone or tablet connected to the same WiFi network.
+        </p>
+
+        {localIp ? (
+          <div className="flex flex-col sm:flex-row gap-6 items-start">
+            {/* QR Code */}
+            <div className="bg-zinc-50 p-4 rounded-2xl border border-zinc-200 flex flex-col items-center gap-2">
+              <QRCodeSVG
+                value={mobileUrl}
+                size={160}
+                bgColor="#fafafa"
+                fgColor="#0E2A47"
+                level="M"
+              />
+              <span className="text-xs text-zinc-400">Scan to open</span>
+            </div>
+
+            {/* URL + instructions */}
+            <div className="flex-1 space-y-4">
+              <div>
+                <label className="text-xs font-medium text-zinc-500 uppercase tracking-wider">Mobile URL</label>
+                <div className="flex items-center gap-2 mt-1">
+                  <code className="flex-1 bg-zinc-50 border border-zinc-200 rounded-xl px-4 py-3 text-sm font-mono text-zinc-800 break-all">
+                    {mobileUrl}
+                  </code>
+                  <button
+                    onClick={handleCopyUrl}
+                    className="p-3 bg-zinc-100 hover:bg-zinc-200 rounded-xl transition-colors flex-shrink-0"
+                    title="Copy URL"
+                  >
+                    {copied ? <Check size={16} className="text-emerald-600" /> : <Copy size={16} className="text-zinc-600" />}
+                  </button>
+                </div>
+              </div>
+
+              <div className="space-y-2 text-sm text-zinc-600">
+                <div className="flex items-start gap-2">
+                  <span className="w-5 h-5 bg-emerald-100 text-emerald-700 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 mt-0.5">1</span>
+                  <span>Make sure your phone is on the <strong>same WiFi</strong> as this computer.</span>
+                </div>
+                <div className="flex items-start gap-2">
+                  <span className="w-5 h-5 bg-emerald-100 text-emerald-700 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 mt-0.5">2</span>
+                  <span>Scan the QR code or type the URL into your phone's browser.</span>
+                </div>
+                <div className="flex items-start gap-2">
+                  <span className="w-5 h-5 bg-emerald-100 text-emerald-700 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 mt-0.5">3</span>
+                  <span>Log in with your staff PIN — managers get full access, staff get the order view.</span>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 text-xs text-zinc-400">
+                <span className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse" />
+                Server running on <strong className="text-zinc-600">{localIp}:3000</strong>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="flex items-center gap-3 text-zinc-400 text-sm py-4">
+            <div className="w-2 h-2 bg-zinc-300 rounded-full animate-pulse" />
+            Detecting local IP address...
+          </div>
+        )}
       </div>
 
       {/* PINs */}

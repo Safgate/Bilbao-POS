@@ -34,16 +34,29 @@ export default defineConfig(({ mode }) => {
             options.reload();
           },
           vite: {
+            plugins: [
+              {
+                // vite-plugin-electron's mergeConfig concatenates the 'formats' array
+                // (['es'] from the plugin + ['cjs'] from us = ['es','cjs']).
+                // This post-hook mutates the resolved config to keep only CJS.
+                name: 'force-preload-cjs',
+                enforce: 'post' as const,
+                configResolved(cfg: any) {
+                  if (cfg.build?.lib?.formats) {
+                    cfg.build.lib.formats = ['cjs'];
+                  }
+                },
+              },
+            ],
             build: {
               outDir: 'dist-electron',
               lib: {
                 entry: 'electron/preload.ts',
                 formats: ['cjs'],
-                fileName: () => 'preload.js',
+                fileName: () => 'preload',
               },
               rollupOptions: {
                 output: {
-                  format: 'cjs',
                   entryFileNames: 'preload.js',
                 },
               },

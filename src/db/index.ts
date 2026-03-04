@@ -96,6 +96,11 @@ export function initDb() {
     db.exec("ALTER TABLE staff ADD COLUMN pin TEXT DEFAULT '0000'");
   }
 
+  const orderColumns = db.prepare('PRAGMA table_info(orders)').all() as any[];
+  if (!orderColumns.find(c => c.name === 'staff_id')) {
+    db.exec('ALTER TABLE orders ADD COLUMN staff_id INTEGER REFERENCES staff(id) ON DELETE SET NULL');
+  }
+
   // Seed initial data if empty
   const categoriesCount = db.prepare('SELECT COUNT(*) as count FROM categories').get() as { count: number };
   if (categoriesCount.count === 0) {

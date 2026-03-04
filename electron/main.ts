@@ -2,6 +2,7 @@ import { app, BrowserWindow, shell, ipcMain } from 'electron';
 import { createServer } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { createRequire } from 'module';
+import { networkInterfaces } from 'os';
 import { db, initDb, dbPath, getDbDirectory } from '../src/db/index';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -9,6 +10,39 @@ import fs from 'fs';
 
 const _require = createRequire(import.meta.url);
 const express = _require('express') as typeof import('express');
+
+/** Returns the best IPv4 address for LAN access (real WiFi/Ethernet over virtual adapters). */
+function getLocalIp(): string {
+  const nets = networkInterfaces();
+
+  // Keywords that identify virtual/VPN adapters to skip
+  const virtualPatterns = [
+    /vmware/i, /vmnet/i, /virtualbox/i, /vbox/i,
+    /hyper-?v/i, /wsl/i, /vethernet/i, /loopback/i,
+    /vpn/i, /tap/i, /tun/i, /docker/i, /bluetooth/i,
+  ];
+
+  const candidates: { name: string; address: string; score: number }[] = [];
+
+  for (const [name, ifaces] of Object.entries(nets)) {
+    const isVirtual = virtualPatterns.some(p => p.test(name));
+    for (const net of ifaces ?? []) {
+      if (net.family !== 'IPv4' || net.internal) continue;
+      // Skip link-local
+      if (net.address.startsWith('169.254.')) continue;
+      // Score: prefer 192.168.x.x (home/office WiFi), then 10.x, then 172.16-31.x
+      let score = isVirtual ? 0 : 10;
+      if (net.address.startsWith('192.168.')) score += 4;
+      else if (net.address.startsWith('10.')) score += 3;
+      else if (net.address.match(/^172\.(1[6-9]|2\d|3[01])\./)) score += 2;
+      candidates.push({ name, address: net.address, score });
+    }
+  }
+
+  if (candidates.length === 0) return 'localhost';
+  candidates.sort((a, b) => b.score - a.score);
+  return candidates[0].address;
+}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -50,6 +84,8 @@ async function createWindow() {
 }
 
 function registerIpcHandlers() {
+  ipcMain.handle('pos:get-local-ip', () => getLocalIp());
+
   ipcMain.handle('pos:list-printers', async () => {
     if (!mainWindow) return [];
     return await mainWindow.webContents.getPrintersAsync();
@@ -114,6 +150,30 @@ function startBackend() {
   const wss = new WebSocketServer({ server });
 
   app.use(express.json({ limit: '10mb' }));
+
+  // Allow all origins so phone browsers on the same LAN can connect
+  app.use((_req: any, res: any, next: any) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    if (_req.method === 'OPTIONS') { res.sendStatus(204); return; }
+    next();
+  });
+
+  // Serve the mobile PWA at /mobile (built into dist-electron/mobile/)
+  const mobileDist = path.join(__dirname, 'mobile');
+  if (fs.existsSync(mobileDist)) {
+    app.use('/mobile', express.static(mobileDist));
+    // SPA fallback — all /mobile/* paths serve index.html
+    app.get('/mobile/*splat', (_req: any, res: any) => {
+      res.sendFile(path.join(mobileDist, 'index.html'));
+    });
+  }
+
+  // Network info endpoint — mobile app uses this for health check
+  app.get('/api/network-info', (_req: any, res: any) => {
+    res.json({ ip: getLocalIp(), port: PORT, version: '1.0.0' });
+  });
 
   // Initialize DB
   initDb();
@@ -232,29 +292,81 @@ function startBackend() {
   });
 
   app.post('/api/orders', (req, res) => {
-    const { table_id, items, total } = req.body;
-    
+    const { table_id, staff_id, items } = req.body;
+    let { total } = req.body;
+
+    if (!Array.isArray(items) || items.length === 0) {
+      res.status(400).json({ error: 'items are required' });
+      return;
+    }
+
+    // Compute total from items if not provided by client
+    if (total == null || isNaN(Number(total))) {
+      total = (items as any[]).reduce((sum: number, i: any) => sum + Number(i.price) * Number(i.quantity), 0);
+    }
+
     const insertOrder = db.transaction(() => {
-      const orderStmt = db.prepare('INSERT INTO orders (table_id, status, total, created_at) VALUES (?, ?, ?, ?)');
-      const orderInfo = orderStmt.run(table_id, 'pending', total, new Date().toISOString());
+      const orderStmt = db.prepare(
+        'INSERT INTO orders (table_id, staff_id, status, total, created_at) VALUES (?, ?, ?, ?, ?)'
+      );
+      const orderInfo = orderStmt.run(table_id ?? null, staff_id ?? null, 'pending', total, new Date().toISOString());
       const orderId = orderInfo.lastInsertRowid;
 
       const itemStmt = db.prepare('INSERT INTO order_items (order_id, menu_item_id, quantity, price) VALUES (?, ?, ?, ?)');
-      for (const item of items) {
+      for (const item of items as any[]) {
         itemStmt.run(orderId, item.menu_item_id, item.quantity, item.price);
       }
 
       if (table_id) {
         db.prepare("UPDATE tables SET status = 'occupied' WHERE id = ?").run(table_id);
       }
-      
+
       return orderId;
     });
 
-    const orderId = insertOrder();
+    try {
+      const orderId = insertOrder();
+      broadcastUpdate('orders_updated');
+      broadcastUpdate('tables_updated');
+
+      // Broadcast full order details so the desktop can auto-print mobile orders
+      const fullOrder = db.prepare(`
+        SELECT
+          o.id, o.total, o.created_at,
+          t.name  AS table_name,
+          s.name  AS staff_name
+        FROM orders o
+        LEFT JOIN tables t ON t.id = o.table_id
+        LEFT JOIN staff  s ON s.id = o.staff_id
+        WHERE o.id = ?
+      `).get(orderId) as any;
+
+      const fullItems = db.prepare(`
+        SELECT oi.quantity, oi.price, m.name
+        FROM order_items oi
+        JOIN menu_items m ON m.id = oi.menu_item_id
+        WHERE oi.order_id = ?
+      `).all(orderId) as any[];
+
+      broadcastUpdate('new_order', { ...fullOrder, items: fullItems });
+
+      res.json({ id: orderId });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || 'Failed to create order' });
+    }
+  });
+
+  // Convenience shortcut used by mobile manager view
+  app.put('/api/orders/:id/complete', (req, res) => {
+    const { id } = req.params;
+    const order: any = db.prepare('SELECT table_id FROM orders WHERE id = ?').get(id);
+    db.prepare("UPDATE orders SET status = 'completed' WHERE id = ?").run(id);
+    if (order?.table_id) {
+      db.prepare("UPDATE tables SET status = 'available' WHERE id = ?").run(order.table_id);
+    }
     broadcastUpdate('orders_updated');
     broadcastUpdate('tables_updated');
-    res.json({ id: orderId });
+    res.json({ success: true });
   });
 
   app.put('/api/orders/:id/status', (req, res) => {
@@ -308,8 +420,13 @@ function startBackend() {
 
   app.post('/api/shifts/open', (req, res) => {
     const { staff_id } = req.body;
-    const stmt = db.prepare('INSERT INTO shifts (staff_id, start_time) VALUES (?, ?)');
-    const info = stmt.run(staff_id, new Date().toISOString());
+    // Return existing open shift instead of creating a duplicate
+    const existing: any = db.prepare('SELECT id FROM shifts WHERE staff_id = ? AND end_time IS NULL').get(staff_id);
+    if (existing) {
+      res.json({ id: existing.id, already_open: true });
+      return;
+    }
+    const info = db.prepare('INSERT INTO shifts (staff_id, start_time) VALUES (?, ?)').run(staff_id, new Date().toISOString());
     broadcastUpdate('shifts_updated');
     res.json({ id: info.lastInsertRowid });
   });
@@ -376,6 +493,18 @@ function startBackend() {
     if (body.logo_url != null) upsert.run('logo_url', String(body.logo_url));
     broadcastUpdate('settings_updated');
     res.json({ success: true });
+  });
+
+  app.post('/api/staff/verify-pin', (req, res) => {
+    const { id, pin } = req.body || {};
+    if (!id || !pin) { res.status(400).json({ success: false }); return; }
+    const member: any = db.prepare('SELECT id, name, role, pin FROM staff WHERE id = ?').get(id);
+    if (!member) { res.status(404).json({ success: false }); return; }
+    if (String(member.pin) === String(pin)) {
+      res.json({ success: true, staff: { id: member.id, name: member.name, role: member.role } });
+    } else {
+      res.json({ success: false });
+    }
   });
 
   app.put('/api/staff/:id/pin', (req, res) => {
@@ -465,8 +594,10 @@ function startBackend() {
     res.send(rows.join('\n'));
   });
 
-  server.listen(PORT, 'localhost', () => {
+  server.listen(PORT, '0.0.0.0', () => {
+    const localIp = getLocalIp();
     console.log(`Backend server running on http://localhost:${PORT}`);
+    console.log(`Mobile access: http://${localIp}:${PORT}/mobile`);
   });
 }
 
