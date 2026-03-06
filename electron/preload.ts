@@ -28,4 +28,5 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getLocalIp: async (): Promise<string> => {
     return await ipcRenderer.invoke('pos:get-local-ip');
   },
+  openCustomerDisplay: () => ipcRenderer.invoke('pos:open-customer-display'),
 });

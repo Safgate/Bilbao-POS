@@ -74,7 +74,8 @@ export function initDb() {
       name TEXT NOT NULL,
       role TEXT NOT NULL,
       hourly_rate REAL NOT NULL,
-      pin TEXT DEFAULT '0000'
+      pin TEXT DEFAULT '0000',
+      monthly_salary REAL NOT NULL DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS shifts (
@@ -89,11 +90,22 @@ export function initDb() {
       key TEXT PRIMARY KEY,
       value TEXT
     );
+
+    CREATE TABLE IF NOT EXISTS expenses (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      date TEXT NOT NULL, -- YYYY-MM-DD
+      amount REAL NOT NULL,
+      category TEXT,
+      note TEXT
+    );
   `);
 
   const staffColumns = db.prepare('PRAGMA table_info(staff)').all() as any[];
   if (!staffColumns.find(c => c.name === 'pin')) {
     db.exec("ALTER TABLE staff ADD COLUMN pin TEXT DEFAULT '0000'");
+  }
+  if (!staffColumns.find(c => c.name === 'monthly_salary')) {
+    db.exec('ALTER TABLE staff ADD COLUMN monthly_salary REAL NOT NULL DEFAULT 0');
   }
 
   const orderColumns = db.prepare('PRAGMA table_info(orders)').all() as any[];
@@ -123,9 +135,11 @@ export function initDb() {
     insertTable.run('Table 5', 'available');
     insertTable.run('Table 6', 'available');
 
+    // Seed with default PIN '0000' — must be changed before going live.
+    // These plain-text PINs will be hashed by migrateHashPins() on first startup.
     const insertStaff = db.prepare('INSERT INTO staff (name, role, hourly_rate, pin) VALUES (?, ?, ?, ?)');
-    insertStaff.run('Alice', 'Manager', 25.00, '1234');
-    insertStaff.run('Bob', 'Barista', 18.00, '5678');
-    insertStaff.run('Charlie', 'Barista', 18.00, '9012');
+    insertStaff.run('Alice', 'Manager', 25.00, '0000');
+    insertStaff.run('Bob', 'Barista', 18.00, '0000');
+    insertStaff.run('Charlie', 'Barista', 18.00, '0000');
   }
 }

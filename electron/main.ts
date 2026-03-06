@@ -3,6 +3,7 @@ import { createServer } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { createRequire } from 'module';
 import { networkInterfaces } from 'os';
+import { scryptSync, randomBytes, timingSafeEqual } from 'crypto';
 import { db, initDb, dbPath, getDbDirectory } from '../src/db/index';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -10,6 +11,62 @@ import fs from 'fs';
 
 const _require = createRequire(import.meta.url);
 const express = _require('express') as typeof import('express');
+
+// --- PIN Hashing (Node built-in crypto — no extra deps) ---
+function hashPin(plain: string): string {
+  const salt = randomBytes(16).toString('hex');
+  const derived = scryptSync(plain, salt, 32);
+  return `${salt}:${derived.toString('hex')}`;
+}
+
+function verifyPinHash(plain: string, stored: string): boolean {
+  const parts = stored.split(':');
+  if (parts.length !== 2) {
+    // Legacy plain-text PIN — accept during migration window
+    return plain === stored;
+  }
+  const [salt, hash] = parts;
+  try {
+    const derived = scryptSync(plain, salt, 32);
+    return timingSafeEqual(derived, Buffer.from(hash, 'hex'));
+  } catch {
+    return false;
+  }
+}
+
+// --- In-memory rate limiter for PIN verification (10 attempts / 15 min per IP) ---
+const pinAttempts = new Map<string, { count: number; resetAt: number }>();
+function checkPinRateLimit(ip: string): boolean {
+  const now = Date.now();
+  const entry = pinAttempts.get(ip);
+  if (entry && now < entry.resetAt) {
+    if (entry.count >= 10) return false;
+    entry.count++;
+  } else {
+    pinAttempts.set(ip, { count: 1, resetAt: now + 15 * 60 * 1000 });
+  }
+  return true;
+}
+
+// --- Migrate any plain-text PINs to scrypt hashes on startup ---
+function migrateHashPins() {
+  const staff = db.prepare('SELECT id, pin FROM staff').all() as { id: number; pin: string }[];
+  for (const member of staff) {
+    if (member.pin && !member.pin.includes(':')) {
+      db.prepare('UPDATE staff SET pin = ? WHERE id = ?').run(hashPin(member.pin), member.id);
+    }
+  }
+}
+
+// --- Restrict a route to localhost-only (backup, CSV export) ---
+const requireLocalhost = (req: any, res: any, next: any) => {
+  const addr = req.socket.remoteAddress;
+  if (addr === '127.0.0.1' || addr === '::1' || addr === '::ffff:127.0.0.1') {
+    next();
+  } else {
+    res.status(403).json({ error: 'Forbidden: only accessible from the local machine' });
+  }
+};
 
 /** Returns the best IPv4 address for LAN access (real WiFi/Ethernet over virtual adapters). */
 function getLocalIp(): string {
@@ -72,19 +129,44 @@ async function createWindow() {
   // Load the app
   if (process.env.NODE_ENV === 'development' || !app.isPackaged) {
     mainWindow.loadURL('http://localhost:5173');
-    mainWindow.webContents.openDevTools();
+    // Only open DevTools in explicit development mode, not all non-packaged builds
+    if (process.env.NODE_ENV === 'development') {
+      mainWindow.webContents.openDevTools();
+    }
   } else {
     mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
   }
 
+  // VULN-06: Only open safe http/https URLs — never file://, ms-msdt:, or other protocol handlers
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url);
+    if (url.startsWith('https://') || url.startsWith('http://')) {
+      shell.openExternal(url);
+    }
     return { action: 'deny' };
   });
 }
 
 function registerIpcHandlers() {
   ipcMain.handle('pos:get-local-ip', () => getLocalIp());
+
+  ipcMain.handle('pos:open-customer-display', () => {
+    const win = new BrowserWindow({
+      width: 1280,
+      height: 720,
+      title: 'Customer Display',
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true,
+        preload: path.join(__dirname, 'preload.js'),
+      },
+    });
+    if (process.env.NODE_ENV === 'development' || !app.isPackaged) {
+      win.loadURL('http://localhost:5173/?view=customer');
+    } else {
+      win.loadFile(path.join(__dirname, '../dist/index.html'), { query: { view: 'customer' } });
+    }
+    win.setMenuBarVisibility(false);
+  });
 
   ipcMain.handle('pos:list-printers', async () => {
     if (!mainWindow) return [];
@@ -151,22 +233,43 @@ function startBackend() {
 
   app.use(express.json({ limit: '10mb' }));
 
-  // Allow all origins so phone browsers on the same LAN can connect
+  // VULN-10: Restrict CORS to localhost (Electron renderer / dev Vite server).
+  // Mobile PWA requests are same-origin (served from this server) so need no CORS header.
+  // Wildcard CORS would allow any website on the user's machine to read POS data.
+  const trustedOrigins = new Set([
+    'http://localhost:5173',
+    'http://localhost:3000',
+    'http://127.0.0.1:5173',
+    'http://127.0.0.1:3000',
+  ]);
   app.use((_req: any, res: any, next: any) => {
-    res.setHeader('Access-Control-Allow-Origin', '*');
+    const origin = (_req.headers['origin'] || '') as string;
+    if (!origin || origin === 'null' || trustedOrigins.has(origin)) {
+      if (origin && origin !== 'null') {
+        res.setHeader('Access-Control-Allow-Origin', origin);
+      }
+    }
     res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
     if (_req.method === 'OPTIONS') { res.sendStatus(204); return; }
     next();
   });
 
-  // Serve the mobile PWA at /mobile (built into dist-electron/mobile/)
+  // Serve the mobile staff PWA at /mobile
   const mobileDist = path.join(__dirname, 'mobile');
   if (fs.existsSync(mobileDist)) {
     app.use('/mobile', express.static(mobileDist));
-    // SPA fallback — all /mobile/* paths serve index.html
     app.get('/mobile/*splat', (_req: any, res: any) => {
       res.sendFile(path.join(mobileDist, 'index.html'));
+    });
+  }
+
+  // Serve the customer self-ordering PWA at /order
+  const orderDist = path.join(__dirname, 'order');
+  if (fs.existsSync(orderDist)) {
+    app.use('/order', express.static(orderDist));
+    app.get('/order/*splat', (_req: any, res: any) => {
+      res.sendFile(path.join(orderDist, 'index.html'));
     });
   }
 
@@ -175,8 +278,9 @@ function startBackend() {
     res.json({ ip: getLocalIp(), port: PORT, version: '1.0.0' });
   });
 
-  // Initialize DB
+  // Initialize DB and migrate plain-text PINs to hashed
   initDb();
+  migrateHashPins();
 
   const uploadsDir = path.join(getDbDirectory(), 'uploads');
   if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
@@ -207,10 +311,20 @@ function startBackend() {
 
   app.post('/api/categories', (req, res) => {
     const { name } = req.body;
+    if (!name?.trim()) { res.status(400).json({ error: 'name is required' }); return; }
     const stmt = db.prepare('INSERT INTO categories (name) VALUES (?)');
-    const info = stmt.run(name);
+    const info = stmt.run(name.trim());
     broadcastUpdate('categories_updated');
-    res.json({ id: info.lastInsertRowid, name });
+    res.json({ id: info.lastInsertRowid, name: name.trim() });
+  });
+
+  app.put('/api/categories/:id', (req, res) => {
+    const { id } = req.params;
+    const { name } = req.body;
+    if (!name?.trim()) { res.status(400).json({ error: 'name required' }); return; }
+    db.prepare('UPDATE categories SET name = ? WHERE id = ?').run(name.trim(), id);
+    broadcastUpdate('categories_updated');
+    res.json({ success: true });
   });
 
   app.delete('/api/categories/:id', (req, res) => {
@@ -228,8 +342,11 @@ function startBackend() {
 
   app.post('/api/menu-items', (req, res) => {
     const { category_id, name, price, image_url } = req.body;
+    if (!category_id || !name?.trim() || isNaN(Number(price)) || Number(price) < 0) {
+      res.status(400).json({ error: 'category_id, name, and a valid price are required' }); return;
+    }
     const stmt = db.prepare('INSERT INTO menu_items (category_id, name, price, image_url) VALUES (?, ?, ?, ?)');
-    const info = stmt.run(category_id, name, price, image_url);
+    const info = stmt.run(category_id, name.trim(), Number(price), image_url || null);
     broadcastUpdate('menu_updated');
     res.json({ id: info.lastInsertRowid });
   });
@@ -258,15 +375,19 @@ function startBackend() {
 
   app.post('/api/tables', (req, res) => {
     const { name } = req.body;
+    if (!name?.trim()) { res.status(400).json({ error: 'name is required' }); return; }
     const stmt = db.prepare('INSERT INTO tables (name, status) VALUES (?, ?)');
-    const info = stmt.run(name, 'available');
+    const info = stmt.run(name.trim(), 'available');
     broadcastUpdate('tables_updated');
-    res.json({ id: info.lastInsertRowid, name, status: 'available' });
+    res.json({ id: info.lastInsertRowid, name: name.trim(), status: 'available' });
   });
 
   app.put('/api/tables/:id/status', (req, res) => {
     const { id } = req.params;
     const { status } = req.body;
+    if (!['available', 'occupied'].includes(status)) {
+      res.status(400).json({ error: 'status must be "available" or "occupied"' }); return;
+    }
     db.prepare('UPDATE tables SET status = ? WHERE id = ?').run(status, id);
     broadcastUpdate('tables_updated');
     res.json({ success: true });
@@ -372,7 +493,11 @@ function startBackend() {
   app.put('/api/orders/:id/status', (req, res) => {
     const { id } = req.params;
     const { status, table_id } = req.body;
-    
+    const validStatuses = ['pending', 'preparing', 'ready', 'completed', 'cancelled'];
+    if (!validStatuses.includes(status)) {
+      res.status(400).json({ error: `status must be one of: ${validStatuses.join(', ')}` }); return;
+    }
+
     db.transaction(() => {
       db.prepare('UPDATE orders SET status = ? WHERE id = ?').run(status, id);
       if (status === 'completed' || status === 'cancelled') {
@@ -381,24 +506,60 @@ function startBackend() {
         }
       }
     })();
-    
+
     broadcastUpdate('orders_updated');
     broadcastUpdate('tables_updated');
     res.json({ success: true });
   });
 
   // Staff & Shifts
+  // VULN-01: Never return the pin column — PINs are verified server-side only
   app.get('/api/staff', (req, res) => {
-    const staff = db.prepare('SELECT * FROM staff').all();
+    const staff = db.prepare('SELECT id, name, role, hourly_rate, monthly_salary FROM staff').all();
     res.json(staff);
   });
 
   app.post('/api/staff', (req, res) => {
-    const { name, role, hourly_rate, pin } = req.body;
-    const stmt = db.prepare('INSERT INTO staff (name, role, hourly_rate, pin) VALUES (?, ?, ?, ?)');
-    const info = stmt.run(name, role, hourly_rate, pin || '0000');
+    const { name, role, hourly_rate, monthly_salary, pin } = req.body;
+    if (!name?.trim() || !role?.trim()) {
+      res.status(400).json({ error: 'name and role are required' }); return;
+    }
+    const rawPin = String(pin || '0000');
+    if (!/^\d{4}$/.test(rawPin)) {
+      res.status(400).json({ error: 'PIN must be exactly 4 digits' }); return;
+    }
+    const stmt = db.prepare('INSERT INTO staff (name, role, hourly_rate, monthly_salary, pin) VALUES (?, ?, ?, ?, ?)');
+    const info = stmt.run(
+      name.trim(),
+      role.trim(),
+      Number(hourly_rate ?? 0),
+      Number(monthly_salary ?? 0),
+      hashPin(rawPin),
+    );
     broadcastUpdate('staff_updated');
     res.json({ id: info.lastInsertRowid });
+  });
+
+  app.put('/api/staff/:id', (req, res) => {
+    const { id } = req.params;
+    const { name, role, hourly_rate, monthly_salary, pin } = req.body || {};
+    const fields: string[] = [];
+    const values: any[] = [];
+    if (name != null)        { fields.push('name = ?');        values.push(name); }
+    if (role != null)        { fields.push('role = ?');        values.push(role); }
+    if (hourly_rate != null) { fields.push('hourly_rate = ?'); values.push(Number(hourly_rate)); }
+    if (monthly_salary != null) { fields.push('monthly_salary = ?'); values.push(Number(monthly_salary)); }
+    if (pin != null) {
+      const rawPin = String(pin);
+      if (!/^\d{4}$/.test(rawPin)) { res.status(400).json({ error: 'PIN must be exactly 4 digits' }); return; }
+      fields.push('pin = ?');
+      values.push(hashPin(rawPin));
+    }
+    if (fields.length === 0) { res.status(400).json({ error: 'nothing to update' }); return; }
+    values.push(id);
+    db.prepare(`UPDATE staff SET ${fields.join(', ')} WHERE id = ?`).run(...values);
+    broadcastUpdate('staff_updated');
+    res.json({ success: true });
   });
 
   app.delete('/api/staff/:id', (req, res) => {
@@ -406,6 +567,19 @@ function startBackend() {
     db.prepare('DELETE FROM staff WHERE id = ?').run(id);
     broadcastUpdate('staff_updated');
     res.json({ success: true });
+  });
+
+  // Cart preview — POS broadcasts the live cart so a customer display can show it
+  let currentCartPreview: any = { items: [], total: 0, tableName: '' };
+
+  app.post('/api/cart-preview', (req, res) => {
+    currentCartPreview = req.body || { items: [], total: 0, tableName: '' };
+    broadcastUpdate('cart_preview', currentCartPreview);
+    res.json({ success: true });
+  });
+
+  app.get('/api/cart-preview', (_req, res) => {
+    res.json(currentCartPreview);
   });
 
   app.get('/api/shifts', (req, res) => {
@@ -477,6 +651,50 @@ function startBackend() {
     });
   });
 
+  // Monthly profit (simple view: revenue - expenses - monthly salaries)
+  app.get('/api/reports/monthly-profit', (req, res) => {
+    const { month } = req.query; // YYYY-MM
+    if (!month || typeof month !== 'string' || !/^\d{4}-\d{2}$/.test(month)) {
+      res.status(400).json({ error: 'month must be in YYYY-MM format' });
+      return;
+    }
+
+    const year = Number(month.slice(0, 4));
+    const m = Number(month.slice(5, 7)) - 1;
+    const fromDate = new Date(year, m, 1);
+    const toDate = new Date(year, m + 1, 0);
+
+    const fromStr = fromDate.toISOString().slice(0, 10);
+    const toStr = toDate.toISOString().slice(0, 10);
+
+    const revenueRow = db.prepare(
+      "SELECT COALESCE(SUM(total), 0) as revenue FROM orders WHERE status = 'completed' AND date(created_at) >= ? AND date(created_at) <= ?"
+    ).get(fromStr, toStr) as { revenue: number };
+
+    const expensesRow = db.prepare(
+      'SELECT COALESCE(SUM(amount), 0) as expenses FROM expenses WHERE date >= ? AND date <= ?'
+    ).get(fromStr, toStr) as { expenses: number };
+
+    const payrollRow = db.prepare(
+      'SELECT COALESCE(SUM(monthly_salary), 0) as payroll FROM staff'
+    ).get() as { payroll: number };
+
+    const revenue = revenueRow.revenue || 0;
+    const expenses = expensesRow.expenses || 0;
+    const payroll = payrollRow.payroll || 0;
+    const profit = revenue - expenses - payroll;
+
+    res.json({
+      month,
+      from: fromStr,
+      to: toStr,
+      revenue,
+      expenses,
+      payroll,
+      profit,
+    });
+  });
+
   // Settings
   app.get('/api/settings', (req, res) => {
     const rows = db.prepare('SELECT key, value FROM settings').all() as { key: string; value: string }[];
@@ -491,42 +709,66 @@ function startBackend() {
     if (body.language != null) upsert.run('language', String(body.language));
     if (body.printer != null) upsert.run('printer', String(body.printer));
     if (body.logo_url != null) upsert.run('logo_url', String(body.logo_url));
+    if (body.auto_print_mobile != null) upsert.run('auto_print_mobile', String(body.auto_print_mobile));
+    if (body.receipt_business_name != null) upsert.run('receipt_business_name', String(body.receipt_business_name));
+    if (body.receipt_header != null) upsert.run('receipt_header', String(body.receipt_header));
+    if (body.receipt_footer != null) upsert.run('receipt_footer', String(body.receipt_footer));
+    if (body.receipt_currency != null) upsert.run('receipt_currency', String(body.receipt_currency));
+    if (body.receipt_show_table != null) upsert.run('receipt_show_table', String(body.receipt_show_table));
+    if (body.receipt_show_staff != null) upsert.run('receipt_show_staff', String(body.receipt_show_staff));
+    if (body.receipt_wifi_ssid != null) upsert.run('receipt_wifi_ssid', String(body.receipt_wifi_ssid));
+    if (body.receipt_wifi_password != null) upsert.run('receipt_wifi_password', String(body.receipt_wifi_password));
+    if (body.receipt_show_wifi != null) upsert.run('receipt_show_wifi', String(body.receipt_show_wifi));
     broadcastUpdate('settings_updated');
     res.json({ success: true });
   });
 
+  // VULN-01/05: Server-side PIN verification with rate limiting
   app.post('/api/staff/verify-pin', (req, res) => {
+    const ip = req.socket.remoteAddress || 'unknown';
+    if (!checkPinRateLimit(ip)) {
+      res.status(429).json({ success: false, error: 'Too many attempts. Try again in 15 minutes.' });
+      return;
+    }
     const { id, pin } = req.body || {};
     if (!id || !pin) { res.status(400).json({ success: false }); return; }
     const member: any = db.prepare('SELECT id, name, role, pin FROM staff WHERE id = ?').get(id);
     if (!member) { res.status(404).json({ success: false }); return; }
-    if (String(member.pin) === String(pin)) {
+    if (verifyPinHash(String(pin), String(member.pin))) {
       res.json({ success: true, staff: { id: member.id, name: member.name, role: member.role } });
     } else {
       res.json({ success: false });
     }
   });
 
+  // VULN-04: Hash PIN before storing
   app.put('/api/staff/:id/pin', (req, res) => {
     const { id } = req.params;
     const { pin } = req.body || {};
-    if (pin == null || String(pin).length !== 4) {
-      res.status(400).json({ error: 'PIN must be 4 digits' });
+    if (pin == null || !/^\d{4}$/.test(String(pin))) {
+      res.status(400).json({ error: 'PIN must be exactly 4 digits' });
       return;
     }
-    db.prepare('UPDATE staff SET pin = ? WHERE id = ?').run(String(pin), id);
+    db.prepare('UPDATE staff SET pin = ? WHERE id = ?').run(hashPin(String(pin)), id);
     broadcastUpdate('staff_updated');
     res.json({ success: true });
   });
 
-  // Upload (base64) - returns URL to access the file
+  // VULN-09: Only allow safe image extensions
+  const ALLOWED_UPLOAD_EXTS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp']);
+
   app.post('/api/upload', (req, res) => {
     const { base64, filename } = req.body || {};
     if (!base64) {
       res.status(400).json({ error: 'Missing base64' });
       return;
     }
-    const ext = path.extname(filename || '') || '.png';
+    const rawExt = path.extname(filename || '').toLowerCase();
+    if (rawExt && !ALLOWED_UPLOAD_EXTS.has(rawExt)) {
+      res.status(400).json({ error: 'File type not allowed. Accepted: jpg, jpeg, png, gif, webp' });
+      return;
+    }
+    const ext = ALLOWED_UPLOAD_EXTS.has(rawExt) ? rawExt : '.png';
     const name = `upload_${Date.now()}${ext}`;
     const filePath = path.join(uploadsDir, name);
     try {
@@ -552,8 +794,8 @@ function startBackend() {
     res.sendFile(filePath);
   });
 
-  // Backup - download raw SQLite database
-  app.get('/api/backup', (req, res) => {
+  // VULN-03: Backup and export are localhost-only — too sensitive to expose on LAN
+  app.get('/api/backup', requireLocalhost, (req, res) => {
     res.setHeader('Content-Type', 'application/octet-stream');
     res.setHeader('Content-Disposition', 'attachment; filename="bilbao-backup.db"');
     const stream = fs.createReadStream(dbPath);
@@ -564,8 +806,7 @@ function startBackend() {
     stream.pipe(res);
   });
 
-  // Simple CSV export of orders + items
-  app.get('/api/export/orders.csv', (req, res) => {
+  app.get('/api/export/orders.csv', requireLocalhost, (req, res) => {
     const orders = db.prepare('SELECT * FROM orders').all() as any[];
     const items = db.prepare('SELECT * FROM order_items').all() as any[];
 
@@ -592,6 +833,46 @@ function startBackend() {
     res.setHeader('Content-Type', 'text/csv');
     res.setHeader('Content-Disposition', 'attachment; filename="orders-export.csv"');
     res.send(rows.join('\n'));
+  });
+
+  // --- Expenses ---
+  app.get('/api/expenses', (req, res) => {
+    const { from, to } = req.query;
+    let query = 'SELECT * FROM expenses';
+    const params: string[] = [];
+
+    if (from) {
+      query += params.length === 0 ? ' WHERE' : ' AND';
+      query += ' date >= ?';
+      params.push(String(from));
+    }
+    if (to) {
+      query += params.length === 0 ? ' WHERE' : ' AND';
+      query += ' date <= ?';
+      params.push(String(to));
+    }
+
+    query += ' ORDER BY date DESC, id DESC';
+
+    const rows = db.prepare(query).all(...params);
+    res.json(rows);
+  });
+
+  app.post('/api/expenses', (req, res) => {
+    const { date, amount, category, note } = req.body || {};
+    if (!date || !amount) {
+      res.status(400).json({ error: 'date and amount are required' });
+      return;
+    }
+    const stmt = db.prepare('INSERT INTO expenses (date, amount, category, note) VALUES (?, ?, ?, ?)');
+    const info = stmt.run(String(date), Number(amount), category || null, note || null);
+    res.json({ id: info.lastInsertRowid });
+  });
+
+  app.delete('/api/expenses/:id', (req, res) => {
+    const { id } = req.params;
+    db.prepare('DELETE FROM expenses WHERE id = ?').run(id);
+    res.json({ success: true });
   });
 
   server.listen(PORT, '0.0.0.0', () => {

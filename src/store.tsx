@@ -9,6 +9,24 @@ export interface AppSettings {
   printer: string;
   logoUrl: string;
   autoPrintMobile: boolean;
+  /** Display name at the top of printed receipts */
+  receiptBusinessName: string;
+  /** Multiline header text (address, phone, tax ID, etc.) */
+  receiptHeader: string;
+  /** Multiline footer text (thanks message, Wi‑Fi, socials, etc.) */
+  receiptFooter: string;
+  /** Currency code/symbol used on receipts (e.g. DH, MAD, €, $) */
+  receiptCurrency: string;
+  /** Whether to show the table name on receipts */
+  receiptShowTable: boolean;
+  /** Whether to show the staff member name on receipts */
+  receiptShowStaff: boolean;
+  /** Optional Wi‑Fi network name to print on receipts */
+  receiptWifiSsid: string;
+  /** Optional Wi‑Fi password to print on receipts */
+  receiptWifiPassword: string;
+  /** Whether to include the Wi‑Fi block on receipts */
+  receiptShowWifi: boolean;
 }
 
 const defaultSettings: AppSettings = {
@@ -16,6 +34,15 @@ const defaultSettings: AppSettings = {
   printer: '',
   logoUrl: '',
   autoPrintMobile: true,
+  receiptBusinessName: 'Bilbao Coffee',
+  receiptHeader: '',
+  receiptFooter: 'Thank you for your visit!',
+  receiptCurrency: 'DH',
+  receiptShowTable: true,
+  receiptShowStaff: true,
+  receiptWifiSsid: '',
+  receiptWifiPassword: '',
+  receiptShowWifi: false,
 };
 
 interface AppState {
@@ -57,10 +84,20 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       const res = await apiFetch('/api/settings');
       const raw = await res.json();
       setSettingsState({
-        language: (raw.language as Lang) || 'en',
-        printer: raw.printer || '',
-        logoUrl: raw.logo_url || '',
+        ...defaultSettings,
+        language: (raw.language as Lang) || defaultSettings.language,
+        printer: raw.printer || defaultSettings.printer,
+        logoUrl: raw.logo_url || defaultSettings.logoUrl,
         autoPrintMobile: raw.auto_print_mobile !== 'false',
+        receiptBusinessName: raw.receipt_business_name || defaultSettings.receiptBusinessName,
+        receiptHeader: raw.receipt_header || defaultSettings.receiptHeader,
+        receiptFooter: raw.receipt_footer || defaultSettings.receiptFooter,
+        receiptCurrency: raw.receipt_currency || defaultSettings.receiptCurrency,
+        receiptShowTable: raw.receipt_show_table !== 'false',
+        receiptShowStaff: raw.receipt_show_staff !== 'false',
+        receiptWifiSsid: raw.receipt_wifi_ssid || defaultSettings.receiptWifiSsid,
+        receiptWifiPassword: raw.receipt_wifi_password || defaultSettings.receiptWifiPassword,
+        receiptShowWifi: raw.receipt_show_wifi === 'true',
       });
     } catch {
       setSettingsState(defaultSettings);
@@ -78,38 +115,65 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
         printer: next.printer,
         logo_url: next.logoUrl || undefined,
         auto_print_mobile: String(next.autoPrintMobile),
+        receipt_business_name: next.receiptBusinessName,
+        receipt_header: next.receiptHeader,
+        receipt_footer: next.receiptFooter,
+        receipt_currency: next.receiptCurrency,
+        receipt_show_table: String(next.receiptShowTable),
+        receipt_show_staff: String(next.receiptShowStaff),
+        receipt_wifi_ssid: next.receiptWifiSsid,
+        receipt_wifi_password: next.receiptWifiPassword,
+        receipt_show_wifi: String(next.receiptShowWifi),
       }),
     });
   };
 
   const fetchCategories = async () => {
-    const res = await apiFetch('/api/categories');
-    setCategories(await res.json());
+    try {
+      const res = await apiFetch('/api/categories');
+      if (!res.ok) return;
+      setCategories(await res.json());
+    } catch { /* backend not ready yet */ }
   };
 
   const fetchMenuItems = async () => {
-    const res = await apiFetch('/api/menu-items');
-    setMenuItems(await res.json());
+    try {
+      const res = await apiFetch('/api/menu-items');
+      if (!res.ok) return;
+      setMenuItems(await res.json());
+    } catch { /* backend not ready yet */ }
   };
 
   const fetchTables = async () => {
-    const res = await apiFetch('/api/tables');
-    setTables(await res.json());
+    try {
+      const res = await apiFetch('/api/tables');
+      if (!res.ok) return;
+      setTables(await res.json());
+    } catch { /* backend not ready yet */ }
   };
 
   const fetchActiveOrders = async () => {
-    const res = await apiFetch('/api/orders/active');
-    setActiveOrders(await res.json());
+    try {
+      const res = await apiFetch('/api/orders/active');
+      if (!res.ok) return;
+      setActiveOrders(await res.json());
+    } catch { /* backend not ready yet */ }
   };
 
   const fetchStaff = async () => {
-    const res = await apiFetch('/api/staff');
-    setStaff(await res.json());
+    try {
+      const res = await apiFetch('/api/staff');
+      if (!res.ok) return;
+      setStaff(await res.json());
+    } catch { /* backend not ready yet */ }
   };
 
   const fetchShifts = async () => {
-    const res = await apiFetch('/api/shifts');
-    setShifts(await res.json());
+    try {
+      const res = await apiFetch('/api/shifts');
+      if (!res.ok) return;
+      setShifts(await res.json());
+    } catch { /* backend not ready yet */ }
   };
 
   const refreshData = () => {
@@ -147,7 +211,13 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       };
 
       ws.onmessage = (event) => {
-        const data = JSON.parse(event.data);
+        let data: { type: string; payload?: any };
+        try {
+          data = JSON.parse(event.data);
+          if (typeof data?.type !== 'string') return;
+        } catch {
+          return;
+        }
         switch (data.type) {
           case 'categories_updated':
             fetchCategories();
@@ -182,6 +252,15 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
               printReceipt(data.payload, {
                 printerName: s.printer || undefined,
                 logoUrl,
+                businessName: s.receiptBusinessName,
+                headerText: s.receiptHeader,
+                footerText: s.receiptFooter,
+                currency: s.receiptCurrency,
+                showTable: s.receiptShowTable,
+                showStaff: s.receiptShowStaff,
+                wifiSsid: s.receiptWifiSsid,
+                wifiPassword: s.receiptWifiPassword,
+                showWifi: s.receiptShowWifi,
               });
             }
             fetchActiveOrders();

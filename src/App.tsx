@@ -13,6 +13,7 @@ import { Tables } from './pages/Tables';
 import { Staff } from './pages/Staff';
 import { Settings } from './pages/Settings';
 import { Reports } from './pages/Reports';
+import { Finance } from './pages/Finance';
 import { Login } from './pages/Login';
 import { PanelLeftOpen } from 'lucide-react';
 
@@ -75,6 +76,7 @@ const MainApp = () => {
         {currentTab === 'tables' && isManagerOrAdmin && <Tables />}
         {currentTab === 'staff' && isManagerOrAdmin && <Staff />}
         {currentTab === 'reports' && isManagerOrAdmin && <Reports />}
+        {currentTab === 'finance' && isManagerOrAdmin && <Finance />}
         {currentTab === 'settings' && isManagerOrAdmin && <Settings />}
       </main>
     </div>

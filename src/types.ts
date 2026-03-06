@@ -40,7 +40,9 @@ export interface Staff {
   name: string;
   role: string;
   hourly_rate: number;
-  pin: string;
+  monthly_salary?: number;
+  /** Not returned by the API — PINs are verified server-side only */
+  pin?: never;
 }
 
 export interface Shift {

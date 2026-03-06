@@ -1,8 +1,8 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '../store';
 import { MenuItem, OrderItem, Table } from '../types';
 import { apiFetch, getApiBaseUrl } from '../api';
-import { ShoppingCart, Plus, Minus, Trash2, CheckCircle, XCircle, Coffee } from 'lucide-react';
+import { ShoppingCart, Plus, Minus, Trash2, CheckCircle, XCircle, Coffee, Monitor } from 'lucide-react';
 import { t } from '../i18n';
 import { printReceipt } from '../utils/print';
 
@@ -46,6 +46,31 @@ export const POS: React.FC = () => {
 
   const cartTotal = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
 
+  // Broadcast cart to the customer-facing display (debounced 200 ms)
+  const broadcastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (broadcastTimer.current) clearTimeout(broadcastTimer.current);
+    broadcastTimer.current = setTimeout(() => {
+      const tableName = selectedTable
+        ? (tables.find(t => t.id === selectedTable)?.name ?? 'Takeaway')
+        : 'Takeaway';
+      apiFetch('/api/cart-preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items: cart, total: cartTotal, tableName }),
+      }).catch(() => {});
+    }, 200);
+    return () => { if (broadcastTimer.current) clearTimeout(broadcastTimer.current); };
+  }, [cart, selectedTable, tables]);
+
+  const openCustomerDisplay = () => {
+    if (window.electronAPI?.openCustomerDisplay) {
+      window.electronAPI.openCustomerDisplay();
+    } else {
+      window.open(`${window.location.origin}/?view=customer`, 'customer-display', 'width=1280,height=720,menubar=no,toolbar=no');
+    }
+  };
+
   const handlePrintReceipt = (orderData: any, orderId: number) => {
     const tableName = selectedTable
       ? tables.find(t => t.id === selectedTable)?.name
@@ -82,6 +107,12 @@ export const POS: React.FC = () => {
 
       setCart([]);
       setSelectedTable(null);
+      // Clear the customer display
+      apiFetch('/api/cart-preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items: [], total: 0, tableName: '' }),
+      }).catch(() => {});
     } catch (error) {
       console.error('Failed to place order', error);
     } finally {
@@ -169,14 +200,23 @@ export const POS: React.FC = () => {
 
       {/* Right Sidebar - Cart & Active Orders */}
       <div className="w-96 bg-white border-l border-zinc-200 flex flex-col h-full shadow-xl z-10">
-        <div className="p-5 border-b border-zinc-100 flex items-center justify-between">
-          <h2 className="text-xl font-bold text-zinc-900 flex items-center gap-2">
-            <ShoppingCart size={24} className="text-emerald-500" />
-            Current Order
-          </h2>
-          <span className="bg-emerald-100 text-emerald-800 text-xs font-bold px-2.5 py-1 rounded-full">
-            {cart.reduce((sum, item) => sum + item.quantity, 0)} items
-          </span>
+        <div className="p-5 border-b border-zinc-100">
+          <div className="flex items-center justify-between">
+            <h2 className="text-xl font-bold text-zinc-900 flex items-center gap-2">
+              <ShoppingCart size={24} className="text-emerald-500" />
+              Current Order
+            </h2>
+            <span className="bg-emerald-100 text-emerald-800 text-xs font-bold px-2.5 py-1 rounded-full">
+              {cart.reduce((sum, item) => sum + item.quantity, 0)} items
+            </span>
+          </div>
+          <button
+            onClick={openCustomerDisplay}
+            className="mt-3 w-full flex items-center justify-center gap-2 text-xs font-medium text-zinc-500 hover:text-zinc-800 hover:bg-zinc-100 py-1.5 rounded-lg transition-colors"
+            title="Open customer-facing display"
+          >
+            <Monitor size={14} /> Customer Display
+          </button>
         </div>
 
         {/* Table Selection */}

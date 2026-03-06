@@ -1,5 +1,5 @@
 import React from 'react';
-import { Coffee, LayoutDashboard, Menu as MenuIcon, Users, Grid, LogOut, User, Settings, FileText, PanelLeftClose } from 'lucide-react';
+import { Coffee, LayoutDashboard, Menu as MenuIcon, Users, Grid, LogOut, User, Settings, FileText, PanelLeftClose, Coins } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { useAppStore } from '../store';
@@ -29,6 +29,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, setCurrentTab, onC
     { id: 'tables', label: t(lang, 'nav.tables'), icon: Grid, roles: ['Manager', 'Admin'] },
     { id: 'staff', label: t(lang, 'nav.staff'), icon: Users, roles: ['Manager', 'Admin'] },
     { id: 'reports', label: t(lang, 'nav.reports'), icon: FileText, roles: ['Manager', 'Admin'] },
+    { id: 'finance', label: 'Finance', icon: Coins, roles: ['Manager', 'Admin'] },
     { id: 'settings', label: t(lang, 'nav.settings'), icon: Settings, roles: ['Manager', 'Admin'] },
   ];
 

@@ -20,21 +20,36 @@ export const Login: React.FC = () => {
       return;
     }
 
-    const user = staff.find(s => s.id === selectedStaffId);
-    if (!user) {
-      setError(t(lang, 'login.errorUser'));
-      return;
-    }
-
-    if (user.pin === pin) {
-      // Auto-open shift on login (idempotent — won't duplicate an already-open shift)
-      apiFetch('/api/shifts/open', {
+    try {
+      const res = await apiFetch('/api/staff/verify-pin', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ staff_id: user.id }),
-      }).catch(() => {});
-      setCurrentUser(user);
-    } else {
+        body: JSON.stringify({ id: selectedStaffId, pin }),
+      });
+
+      if (res.status === 429) {
+        setError('Too many attempts. Please wait 15 minutes.');
+        setPin('');
+        return;
+      }
+
+      const data = await res.json();
+      if (data.success) {
+        // Use full staff object from local store for currentUser
+        const user = staff.find(s => s.id === selectedStaffId);
+        if (user) {
+          apiFetch('/api/shifts/open', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ staff_id: user.id }),
+          }).catch(() => {});
+          setCurrentUser(user);
+        }
+      } else {
+        setError(t(lang, 'login.errorPin'));
+        setPin('');
+      }
+    } catch {
       setError(t(lang, 'login.errorPin'));
       setPin('');
     }

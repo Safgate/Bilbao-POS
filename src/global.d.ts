@@ -11,6 +11,7 @@ declare global {
         options?: { silent?: boolean; deviceName?: string; copies?: number }
       ) => Promise<{ success: boolean; error?: string }>;
       getLocalIp?: () => Promise<string>;
+      openCustomerDisplay?: () => Promise<void>;
     };
   }
 }

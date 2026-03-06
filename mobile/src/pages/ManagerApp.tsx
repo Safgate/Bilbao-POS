@@ -15,7 +15,7 @@ interface Order {
 interface TableRow { id: number; name: string; status: string }
 interface Category { id: number; name: string }
 interface MenuItem { id: number; name: string; price: number; category_id: number; image_url?: string }
-interface StaffMember { id: number; name: string; role: string; hourly_rate: number }
+interface StaffMember { id: number; name: string; role: string; hourly_rate: number; pin?: string | number }
 interface Shift { id: number; staff_id: number; staff_name: string; hourly_rate: number; start_time: string; end_time?: string | null }
 interface CartItem { item: MenuItem; qty: number }
 interface ReportData { totalRevenue: number; orderCount: number; orders: { id: number; total: number; created_at: string }[] }
@@ -355,17 +355,32 @@ function POSSection({ user, tables, onRefresh }: { user: Staff; tables: TableRow
 }
 
 // ─── Menu Section ─────────────────────────────────────────────────────────────
+interface EditItem { id: number; name: string; price: string; category_id: string; image_url: string }
+
 function MenuSection() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
   const [selCat, setSelCat] = useState<number | null>(null);
+
+  // Add category
   const [showAddCat, setShowAddCat] = useState(false);
-  const [showAddItem, setShowAddItem] = useState(false);
   const [newCatName, setNewCatName] = useState('');
+  // Rename category
+  const [showRenameCat, setShowRenameCat] = useState<Category | null>(null);
+  const [renameCatName, setRenameCatName] = useState('');
+
+  // Add item
+  const [showAddItem, setShowAddItem] = useState(false);
   const [newItem, setNewItem] = useState({ name: '', price: '', category_id: '', image_url: '' });
   const [uploading, setUploading] = useState(false);
+  const addFileRef = useRef<HTMLInputElement>(null);
+
+  // Edit item
+  const [editItem, setEditItem] = useState<EditItem | null>(null);
+  const [editUploading, setEditUploading] = useState(false);
+  const editFileRef = useRef<HTMLInputElement>(null);
+
   const [toast, setToast] = useState('');
-  const fileRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
     const [cats, items] = await Promise.all([
@@ -378,11 +393,33 @@ function MenuSection() {
 
   useEffect(() => { load(); }, [load]);
 
+  const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(''), 2000); };
+
+  // ── Image upload helper ───────────────────────────────────────────────────
+  const uploadImage = (file: File, onDone: (url: string) => void, setBusy: (b: boolean) => void) => {
+    setBusy(true);
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const base64 = (reader.result as string).split(',')[1];
+      const res = await apiFetch('/api/upload', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ base64, filename: file.name }) });
+      const data = await res.json();
+      if (data.url) onDone(data.url);
+      setBusy(false);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  // ── Category handlers ─────────────────────────────────────────────────────
   const addCategory = async () => {
     if (!newCatName.trim()) return;
     await apiFetch('/api/categories', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: newCatName }) });
-    setNewCatName(''); setShowAddCat(false); load();
-    setToast('Category added'); setTimeout(() => setToast(''), 2000);
+    setNewCatName(''); setShowAddCat(false); load(); showToast('Category added');
+  };
+
+  const renameCategory = async () => {
+    if (!showRenameCat || !renameCatName.trim()) return;
+    await apiFetch(`/api/categories/${showRenameCat.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: renameCatName }) });
+    setShowRenameCat(null); setRenameCatName(''); load(); showToast('Category renamed');
   };
 
   const deleteCategory = async (id: number) => {
@@ -391,39 +428,39 @@ function MenuSection() {
     load();
   };
 
-  const handleImagePick = () => fileRef.current?.click();
-
-  const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setUploading(true);
-    const reader = new FileReader();
-    reader.onload = async () => {
-      const base64 = (reader.result as string).split(',')[1];
-      const res = await apiFetch('/api/upload', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ base64, filename: file.name }) });
-      const data = await res.json();
-      if (data.url) setNewItem(p => ({ ...p, image_url: data.url }));
-      setUploading(false);
-    };
-    reader.readAsDataURL(file);
-  };
-
+  // ── Item handlers ─────────────────────────────────────────────────────────
   const addItem = async () => {
     if (!newItem.name || !newItem.price || !newItem.category_id) return alert('Fill in name, price and category');
     await apiFetch('/api/menu-items', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: newItem.name, price: parseFloat(newItem.price), category_id: parseInt(newItem.category_id), image_url: newItem.image_url }),
     });
-    setNewItem({ name: '', price: '', category_id: '', image_url: '' }); setShowAddItem(false); load();
-    setToast('Item added'); setTimeout(() => setToast(''), 2000);
+    setNewItem({ name: '', price: '', category_id: '', image_url: '' }); setShowAddItem(false); load(); showToast('Item added');
+  };
+
+  const saveEdit = async () => {
+    if (!editItem) return;
+    if (!editItem.name || !editItem.price || !editItem.category_id) return alert('Fill in name, price and category');
+    await apiFetch(`/api/menu-items/${editItem.id}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: editItem.name, price: parseFloat(editItem.price), category_id: parseInt(editItem.category_id), image_url: editItem.image_url }),
+    });
+    setEditItem(null); load(); showToast('Item updated');
+  };
+
+  const openEdit = (item: MenuItem) => {
+    setShowAddItem(false);
+    setEditItem({ id: item.id, name: item.name, price: String(item.price), category_id: String(item.category_id), image_url: item.image_url || '' });
   };
 
   const deleteItem = async (id: number) => {
     if (!confirm('Delete this menu item?')) return;
     await apiFetch(`/api/menu-items/${id}`, { method: 'DELETE' });
+    if (editItem?.id === id) setEditItem(null);
     load();
   };
 
+  const imgSrc = (url: string) => url.startsWith('http') ? url : getServerUrl() + url;
   const displayedItems = selCat ? menuItems.filter(m => m.category_id === selCat) : menuItems;
 
   return (
@@ -441,14 +478,20 @@ function MenuSection() {
           style={{ border: 'none', borderRadius: 20, padding: '7px 16px', fontSize: 13, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap', background: !selCat ? C.navy : '#e5e7eb', color: !selCat ? '#fff' : '#374151' }}
         >All ({menuItems.length})</button>
         {categories.map(c => (
-          <div key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 0 }}>
+          <div key={c.id} style={{ display: 'flex', alignItems: 'center' }}>
             <button
               onClick={() => setSelCat(selCat === c.id ? null : c.id)}
               style={{ border: 'none', borderRadius: '20px 0 0 20px', padding: '7px 14px', fontSize: 13, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap', background: selCat === c.id ? C.navy : '#e5e7eb', color: selCat === c.id ? '#fff' : '#374151' }}
             >{c.name}</button>
+            {/* Rename */}
+            <button
+              onClick={() => { setShowRenameCat(c); setRenameCatName(c.name); }}
+              style={{ border: 'none', padding: '7px 6px', fontSize: 12, cursor: 'pointer', background: selCat === c.id ? '#1a3f60' : '#d1d5db', color: selCat === c.id ? '#93c5fd' : '#6b7280' }}
+            >✏️</button>
+            {/* Delete */}
             <button
               onClick={() => deleteCategory(c.id)}
-              style={{ border: 'none', borderRadius: '0 20px 20px 0', padding: '7px 8px', fontSize: 13, cursor: 'pointer', background: selCat === c.id ? '#0a1f36' : '#d1d5db', color: selCat === c.id ? '#fca5a5' : '#9ca3af' }}
+              style={{ border: 'none', borderRadius: '0 20px 20px 0', padding: '7px 8px', fontSize: 12, cursor: 'pointer', background: selCat === c.id ? '#0a1f36' : '#d1d5db', color: selCat === c.id ? '#fca5a5' : '#9ca3af' }}
             >✕</button>
           </div>
         ))}
@@ -457,15 +500,14 @@ function MenuSection() {
       {/* Items grid */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
         <h2 style={sec.title}>Items ({displayedItems.length})</h2>
-        <button onClick={() => setShowAddItem(true)} style={{ background: C.terra, color: '#fff', border: 'none', borderRadius: 10, padding: '7px 14px', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>+ Add Item</button>
+        <button onClick={() => { setEditItem(null); setShowAddItem(v => !v); }} style={{ background: C.terra, color: '#fff', border: 'none', borderRadius: 10, padding: '7px 14px', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>+ Add Item</button>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10 }}>
         {displayedItems.map(item => (
-          <div key={item.id} style={{ background: C.card, borderRadius: 14, overflow: 'hidden', boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
+          <div key={item.id} style={{ background: C.card, borderRadius: 14, overflow: 'hidden', boxShadow: editItem?.id === item.id ? `0 0 0 2.5px ${C.terra}` : '0 1px 3px rgba(0,0,0,0.06)' }}>
             {item.image_url ? (
-              <img src={item.image_url.startsWith('http') ? item.image_url : getServerUrl() + item.image_url} alt={item.name}
-                style={{ width: '100%', height: 90, objectFit: 'cover' }} />
+              <img src={imgSrc(item.image_url)} alt={item.name} style={{ width: '100%', height: 90, objectFit: 'cover' }} />
             ) : (
               <div style={{ width: '100%', height: 60, background: '#f4f4f5', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 24 }}>☕</div>
             )}
@@ -474,7 +516,10 @@ function MenuSection() {
               <p style={{ fontSize: 11, color: C.muted, marginBottom: 6 }}>{categories.find(c => c.id === item.category_id)?.name}</p>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <span style={{ fontWeight: 800, color: C.terra, fontSize: 15 }}>{Number(item.price).toFixed(2)} DH</span>
-                <button onClick={() => deleteItem(item.id)} style={{ background: '#fee2e2', color: C.danger, border: 'none', borderRadius: 8, padding: '5px 8px', fontSize: 12, cursor: 'pointer' }}>🗑</button>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <button onClick={() => openEdit(item)} style={{ background: '#eff6ff', color: '#2563eb', border: 'none', borderRadius: 8, padding: '5px 8px', fontSize: 12, cursor: 'pointer' }}>✏️</button>
+                  <button onClick={() => deleteItem(item.id)} style={{ background: '#fee2e2', color: C.danger, border: 'none', borderRadius: 8, padding: '5px 8px', fontSize: 12, cursor: 'pointer' }}>🗑</button>
+                </div>
               </div>
             </div>
           </div>
@@ -493,26 +538,51 @@ function MenuSection() {
         </Sheet>
       )}
 
+      {/* Rename Category Sheet */}
+      {showRenameCat && (
+        <Sheet title={`Rename "${showRenameCat.name}"`} onClose={() => setShowRenameCat(null)}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <Input placeholder="New name" value={renameCatName} onChange={setRenameCatName} />
+            <Btn label="Save Name" onClick={renameCategory} full />
+          </div>
+        </Sheet>
+      )}
+
       {/* Add Item Sheet */}
       {showAddItem && (
         <Sheet title="New Menu Item" onClose={() => setShowAddItem(false)}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             <Input placeholder="Item name" value={newItem.name} onChange={v => setNewItem(p => ({ ...p, name: v }))} />
             <Input placeholder="Price (DH)" type="number" value={newItem.price} onChange={v => setNewItem(p => ({ ...p, price: v }))} />
-            <Select
-              value={newItem.category_id}
-              onChange={v => setNewItem(p => ({ ...p, category_id: v }))}
-              options={categories.map(c => ({ value: String(c.id), label: c.name }))}
-            />
-            <input ref={fileRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={handleImageChange} />
-            {newItem.image_url && (
-              <img src={newItem.image_url.startsWith('http') ? newItem.image_url : getServerUrl() + newItem.image_url} alt="" style={{ width: '100%', height: 120, objectFit: 'cover', borderRadius: 10 }} />
-            )}
-            <button onClick={handleImagePick} disabled={uploading}
-              style={{ border: `1.5px dashed ${C.border}`, borderRadius: 10, padding: 12, background: '#f9fafb', color: C.muted, fontSize: 14, cursor: 'pointer' }}>
+            <Select value={newItem.category_id} onChange={v => setNewItem(p => ({ ...p, category_id: v }))} options={categories.map(c => ({ value: String(c.id), label: c.name }))} />
+            <input ref={addFileRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; if (f) uploadImage(f, url => setNewItem(p => ({ ...p, image_url: url })), setUploading); }} />
+            {newItem.image_url && <img src={imgSrc(newItem.image_url)} alt="" style={{ width: '100%', height: 120, objectFit: 'cover', borderRadius: 10 }} />}
+            <button onClick={() => addFileRef.current?.click()} disabled={uploading} style={{ border: `1.5px dashed ${C.border}`, borderRadius: 10, padding: 12, background: '#f9fafb', color: C.muted, fontSize: 14, cursor: 'pointer' }}>
               {uploading ? '⏳ Uploading…' : '📷 Upload Image (optional)'}
             </button>
             <Btn label="Save Item" onClick={addItem} full />
+          </div>
+        </Sheet>
+      )}
+
+      {/* Edit Item Sheet */}
+      {editItem && (
+        <Sheet title="Edit Menu Item" onClose={() => setEditItem(null)}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <Input placeholder="Item name" value={editItem.name} onChange={v => setEditItem(p => p ? { ...p, name: v } : p)} />
+            <Input placeholder="Price (DH)" type="number" value={editItem.price} onChange={v => setEditItem(p => p ? { ...p, price: v } : p)} />
+            <Select value={editItem.category_id} onChange={v => setEditItem(p => p ? { ...p, category_id: v } : p)} options={categories.map(c => ({ value: String(c.id), label: c.name }))} />
+            <input ref={editFileRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; if (f) uploadImage(f, url => setEditItem(p => p ? { ...p, image_url: url } : p), setEditUploading); }} />
+            {editItem.image_url && (
+              <div style={{ position: 'relative' }}>
+                <img src={imgSrc(editItem.image_url)} alt="" style={{ width: '100%', height: 120, objectFit: 'cover', borderRadius: 10 }} />
+                <button onClick={() => setEditItem(p => p ? { ...p, image_url: '' } : p)} style={{ position: 'absolute', top: 6, right: 6, background: C.danger, color: '#fff', border: 'none', borderRadius: '50%', width: 24, height: 24, fontSize: 14, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>×</button>
+              </div>
+            )}
+            <button onClick={() => editFileRef.current?.click()} disabled={editUploading} style={{ border: `1.5px dashed ${C.border}`, borderRadius: 10, padding: 12, background: '#f9fafb', color: C.muted, fontSize: 14, cursor: 'pointer' }}>
+              {editUploading ? '⏳ Uploading…' : editItem.image_url ? '📷 Replace Image' : '📷 Add Image'}
+            </button>
+            <Btn label="Save Changes" onClick={saveEdit} full />
           </div>
         </Sheet>
       )}
@@ -594,6 +664,8 @@ function StaffSection() {
   const [newStaff, setNewStaff] = useState({ name: '', role: '', hourly_rate: '', pin: '' });
   const [showShifts, setShowShifts] = useState(false);
   const [toast, setToast] = useState('');
+  const [editingStaff, setEditingStaff] = useState<StaffMember | null>(null);
+  const [editForm, setEditForm] = useState({ name: '', role: '', hourly_rate: '', pin: '' });
 
   const load = useCallback(async () => {
     const [s, sh] = await Promise.all([
@@ -630,6 +702,25 @@ function StaffSection() {
     if (!confirm('Delete this staff member?')) return;
     await apiFetch(`/api/staff/${id}`, { method: 'DELETE' });
     load();
+  };
+
+  const openEdit = (m: StaffMember) => {
+    setEditForm({ name: m.name, role: m.role, hourly_rate: String(m.hourly_rate), pin: String(m.pin ?? '') });
+    setEditingStaff(m);
+  };
+
+  const saveEdit = async () => {
+    if (!editingStaff) return;
+    if (!editForm.name || !editForm.role || !editForm.hourly_rate || !editForm.pin) return alert('All fields are required');
+    if (editForm.pin.length !== 4 || !/^\d{4}$/.test(editForm.pin)) return alert('PIN must be exactly 4 digits');
+    await apiFetch(`/api/staff/${editingStaff.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: editForm.name, role: editForm.role, hourly_rate: parseFloat(editForm.hourly_rate), pin: editForm.pin }),
+    });
+    setEditingStaff(null);
+    load();
+    setToast('Staff updated'); setTimeout(() => setToast(''), 2000);
   };
 
   const calcPay = (s: Shift) => {
@@ -674,6 +765,7 @@ function StaffSection() {
                     ? <button onClick={() => clockOut(active.id)} style={{ background: '#fee2e2', color: C.danger, border: 'none', borderRadius: 10, padding: '8px 12px', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>Out</button>
                     : <button onClick={() => clockIn(m.id)} style={{ background: '#dcfce7', color: C.green, border: 'none', borderRadius: 10, padding: '8px 12px', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>In</button>
                   }
+                  <button onClick={() => openEdit(m)} style={{ background: '#eff6ff', color: '#3b82f6', border: 'none', borderRadius: 8, padding: '8px', fontSize: 14, cursor: 'pointer' }}>✏️</button>
                   <button onClick={() => deleteStaff(m.id)} style={{ background: '#fee2e2', color: C.danger, border: 'none', borderRadius: 8, padding: '8px', fontSize: 14, cursor: 'pointer' }}>🗑</button>
                 </div>
               </div>
@@ -718,6 +810,18 @@ function StaffSection() {
             <Input placeholder="Hourly rate (DH)" type="number" value={newStaff.hourly_rate} onChange={v => setNewStaff(p => ({ ...p, hourly_rate: v }))} />
             <Input placeholder="4-digit PIN" type="number" value={newStaff.pin} onChange={v => setNewStaff(p => ({ ...p, pin: v.replace(/\D/g, '').slice(0, 4) }))} />
             <Btn label="Save Staff Member" onClick={addStaff} full />
+          </div>
+        </Sheet>
+      )}
+
+      {editingStaff && (
+        <Sheet title={`Edit — ${editingStaff.name}`} onClose={() => setEditingStaff(null)}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <Input placeholder="Full name" value={editForm.name} onChange={v => setEditForm(p => ({ ...p, name: v }))} />
+            <Input placeholder="Role (e.g. Barista, Waiter)" value={editForm.role} onChange={v => setEditForm(p => ({ ...p, role: v }))} />
+            <Input placeholder="Hourly rate (DH)" type="number" value={editForm.hourly_rate} onChange={v => setEditForm(p => ({ ...p, hourly_rate: v }))} />
+            <Input placeholder="4-digit PIN" type="number" value={editForm.pin} onChange={v => setEditForm(p => ({ ...p, pin: v.replace(/\D/g, '').slice(0, 4) }))} />
+            <Btn label="Save Changes" onClick={saveEdit} full />
           </div>
         </Sheet>
       )}

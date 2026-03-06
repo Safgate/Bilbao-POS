@@ -24,13 +24,15 @@ export function createAppWebSocket(): WebSocket {
   const isFile = window.location.protocol === 'file:';
 
   const protocol = isSecure ? 'wss:' : 'ws:';
-  // In dev (Vite) and Electron (file:) the backend runs on port 3000; connect there for real-time updates.
-  const host =
-    isFile || window.location.hostname === 'localhost'
-      ? `localhost:${WS_PORT}`
-      : window.location.host;
 
-  const wsUrl = `${protocol}//${host}`;
-  return new WebSocket(wsUrl);
+  if (isFile) {
+    // Packaged Electron loads via file:// — connect directly to the backend.
+    return new WebSocket(`${protocol}//localhost:${WS_PORT}`);
+  }
+
+  // In dev or browser mode the app is served by a dev server / reverse proxy.
+  // Route through the same host so the Vite proxy (or any reverse proxy) can
+  // forward the upgrade to the backend on port 3000.
+  return new WebSocket(`${protocol}//${window.location.host}/ws`);
 }
 

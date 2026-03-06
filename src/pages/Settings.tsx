@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useAppStore } from '../store';
 import { t } from '../i18n';
 import type { Lang } from '../i18n';
-import { Settings as SettingsIcon, Lock, Globe, Printer, Image, Smartphone, Copy, Check, BellRing } from 'lucide-react';
+import { Settings as SettingsIcon, Lock, Globe, Printer, Image, Smartphone, Copy, Check, BellRing, QrCode } from 'lucide-react';
 import { apiFetch, getApiBaseUrl } from '../api';
 import { QRCodeSVG } from 'qrcode.react';
 
@@ -18,6 +18,8 @@ export const Settings: React.FC = () => {
 
   const lang = settings.language;
   const mobileUrl = localIp ? `http://${localIp}:3000/mobile` : '';
+  const orderUrl  = localIp ? `http://${localIp}:3000/order`  : '';
+  const [copiedOrder, setCopiedOrder] = useState(false);
 
   useEffect(() => {
     fetchSettings();
@@ -206,6 +208,190 @@ export const Settings: React.FC = () => {
         </label>
       </div>
 
+      {/* Receipt layout */}
+      <div className="bg-white p-6 rounded-2xl shadow-sm border border-zinc-100">
+        <h2 className="text-lg font-bold text-zinc-900 mb-2 flex items-center gap-2">
+          <Printer size={20} className="text-emerald-600" />
+          Receipt layout
+        </h2>
+        <p className="text-sm text-zinc-500 mb-4">
+          Customize what appears on printed tickets: business name, header, footer and currency.
+        </p>
+
+        <div className="grid gap-6 md:grid-cols-2">
+          <div className="space-y-4">
+            <div>
+              <label className="block text-xs font-medium text-zinc-500 uppercase tracking-wider mb-1">
+                Business name
+              </label>
+              <input
+                type="text"
+                value={settings.receiptBusinessName}
+                onChange={(e) => setSettings({ receiptBusinessName: e.target.value })}
+                className="w-full max-w-md bg-zinc-50 border border-zinc-300 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-emerald-500"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-zinc-500 uppercase tracking-wider mb-1">
+                Header lines
+              </label>
+              <textarea
+                rows={3}
+                value={settings.receiptHeader}
+                onChange={(e) => setSettings({ receiptHeader: e.target.value })}
+                className="w-full max-w-md bg-zinc-50 border border-zinc-300 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-emerald-500 resize-none"
+                placeholder="Address, phone, tax ID..."
+              />
+              <p className="text-xs text-zinc-400 mt-1">
+                Shown under the business name (one line per row).
+              </p>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-xs font-medium text-zinc-500 uppercase tracking-wider mb-1">
+                  Footer lines
+                </label>
+                <textarea
+                  rows={3}
+                  value={settings.receiptFooter}
+                  onChange={(e) => setSettings({ receiptFooter: e.target.value })}
+                  className="w-full bg-zinc-50 border border-zinc-300 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-emerald-500 resize-none"
+                  placeholder="Thank you message, website, socials..."
+                />
+              </div>
+
+              <div className="grid gap-4 md:grid-cols-2">
+                <div>
+                  <label className="block text-xs font-medium text-zinc-500 uppercase tracking-wider mb-1">
+                    Currency
+                  </label>
+                  <input
+                    type="text"
+                    maxLength={4}
+                    value={settings.receiptCurrency}
+                    onChange={(e) => setSettings({ receiptCurrency: e.target.value })}
+                    className="w-24 bg-zinc-50 border border-zinc-300 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-zinc-500 uppercase tracking-wider mb-1">
+                    Wi‑Fi on receipt
+                  </label>
+                  <input
+                    type="text"
+                    value={settings.receiptWifiSsid}
+                    onChange={(e) => setSettings({ receiptWifiSsid: e.target.value })}
+                    className="w-full bg-zinc-50 border border-zinc-300 rounded-xl px-3 py-1.5 text-sm outline-none focus:ring-2 focus:ring-emerald-500 mb-2"
+                    placeholder="Network name (SSID)"
+                  />
+                  <input
+                    type="text"
+                    value={settings.receiptWifiPassword}
+                    onChange={(e) => setSettings({ receiptWifiPassword: e.target.value })}
+                    className="w-full bg-zinc-50 border border-zinc-300 rounded-xl px-3 py-1.5 text-sm outline-none focus:ring-2 focus:ring-emerald-500"
+                    placeholder="Password"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-4">
+            <div>
+              <label className="block text-xs font-medium text-zinc-500 uppercase tracking-wider mb-1">
+                Display options
+              </label>
+              <div className="space-y-2 mt-1">
+                <label className="inline-flex items-center gap-2 text-sm text-zinc-700">
+                  <input
+                    type="checkbox"
+                    checked={settings.receiptShowTable}
+                    onChange={(e) => setSettings({ receiptShowTable: e.target.checked })}
+                    className="rounded border-zinc-300 text-emerald-600 focus:ring-emerald-500"
+                  />
+                  <span>Show table name</span>
+                </label>
+                <label className="inline-flex items-center gap-2 text-sm text-zinc-700">
+                  <input
+                    type="checkbox"
+                    checked={settings.receiptShowStaff}
+                    onChange={(e) => setSettings({ receiptShowStaff: e.target.checked })}
+                    className="rounded border-zinc-300 text-emerald-600 focus:ring-emerald-500"
+                  />
+                  <span>Show staff name</span>
+                </label>
+                <label className="inline-flex items-center gap-2 text-sm text-zinc-700">
+                  <input
+                    type="checkbox"
+                    checked={settings.receiptShowWifi}
+                    onChange={(e) => setSettings({ receiptShowWifi: e.target.checked })}
+                    className="rounded border-zinc-300 text-emerald-600 focus:ring-emerald-500"
+                  />
+                  <span>Show Wi‑Fi block</span>
+                </label>
+              </div>
+            </div>
+
+            {/* Tiny visual preview */}
+            <div>
+              <div className="text-xs font-medium text-zinc-500 uppercase tracking-wider mb-1">
+                Preview
+              </div>
+              <div className="bg-zinc-50 border border-dashed border-zinc-300 rounded-xl p-3 text-[11px] font-mono text-zinc-800 w-48">
+                <div className="text-center font-bold">
+                  {settings.receiptBusinessName || 'Bilbao Coffee'}
+                </div>
+                {settings.receiptHeader
+                  .split('\n')
+                  .filter(Boolean)
+                  .slice(0, 3)
+                  .map((line, idx) => (
+                    <div key={idx} className="text-center">
+                      {line}
+                    </div>
+                  ))}
+                <div className="mt-1 text-center text-zinc-500">
+                  Order #123 · 01/01 12:34
+                </div>
+                {settings.receiptShowTable && (
+                  <div className="mt-1 text-center font-semibold">Table 1</div>
+                )}
+                {settings.receiptShowStaff && (
+                  <div className="text-center text-zinc-500 text-[10px]">Alice</div>
+                )}
+                <div className="mt-2 border-t border-dashed border-zinc-400 pt-1">
+                  <div className="flex justify-between items-end">
+                    <span>2x Latte</span>
+                    <span>
+                      40.00 {settings.receiptCurrency || 'DH'}
+                    </span>
+                  </div>
+                </div>
+                <div className="mt-1 border-t border-dashed border-zinc-400 pt-1 flex justify-between items-end font-bold">
+                  <span>TOTAL</span>
+                  <span className="pl-1">
+                    40.00 {settings.receiptCurrency || 'DH'}
+                  </span>
+                </div>
+                {settings.receiptShowWifi && (settings.receiptWifiSsid || settings.receiptWifiPassword) && (
+                  <div className="mt-2 text-center text-zinc-500">
+                    {settings.receiptWifiSsid && <div>Wi‑Fi: {settings.receiptWifiSsid}</div>}
+                    {settings.receiptWifiPassword && <div>Password: {settings.receiptWifiPassword}</div>}
+                  </div>
+                )}
+                <div className="mt-3 border-t border-dashed border-zinc-300 pt-1 text-center text-zinc-500">
+                  {(settings.receiptFooter || 'Thank you for your visit!')
+                    .split('\n')
+                    .filter(Boolean)[0] || 'Thank you for your visit!'}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       {/* Mobile Access */}
       <div className="bg-white p-6 rounded-2xl shadow-sm border border-zinc-100">
         <h2 className="text-lg font-bold text-zinc-900 mb-2 flex items-center gap-2">
@@ -273,6 +459,74 @@ export const Settings: React.FC = () => {
           <div className="flex items-center gap-3 text-zinc-400 text-sm py-4">
             <div className="w-2 h-2 bg-zinc-300 rounded-full animate-pulse" />
             Detecting local IP address...
+          </div>
+        )}
+      </div>
+
+      {/* Customer Self-Ordering */}
+      <div className="bg-white p-6 rounded-2xl shadow-sm border border-zinc-100">
+        <h2 className="text-lg font-bold text-zinc-900 mb-2 flex items-center gap-2">
+          <QrCode size={20} className="text-emerald-600" />
+          Customer Self-Ordering
+        </h2>
+        <p className="text-sm text-zinc-500 mb-4">
+          Customers scan this QR code with their phone to browse the menu and place orders directly from their table — no app download needed.
+        </p>
+
+        {localIp ? (
+          <div className="flex flex-col sm:flex-row gap-6 items-start">
+            <div className="bg-zinc-50 p-4 rounded-2xl border border-zinc-200 flex flex-col items-center gap-2">
+              <QRCodeSVG
+                value={orderUrl}
+                size={160}
+                bgColor="#fafafa"
+                fgColor="#0E2A47"
+                level="M"
+              />
+              <span className="text-xs text-zinc-400">Customer menu</span>
+            </div>
+
+            <div className="flex-1 space-y-4">
+              <div>
+                <label className="text-xs font-medium text-zinc-500 uppercase tracking-wider">Customer Order URL</label>
+                <div className="flex items-center gap-2 mt-1">
+                  <code className="flex-1 bg-zinc-50 border border-zinc-200 rounded-xl px-4 py-3 text-sm font-mono text-zinc-800 break-all">
+                    {orderUrl}
+                  </code>
+                  <button
+                    onClick={() => { navigator.clipboard.writeText(orderUrl); setCopiedOrder(true); setTimeout(() => setCopiedOrder(false), 2000); }}
+                    className="p-3 bg-zinc-100 hover:bg-zinc-200 rounded-xl transition-colors flex-shrink-0"
+                    title="Copy URL"
+                  >
+                    {copiedOrder ? <Check size={16} className="text-emerald-600" /> : <Copy size={16} className="text-zinc-600" />}
+                  </button>
+                </div>
+              </div>
+
+              <div className="space-y-2 text-sm text-zinc-600">
+                <div className="flex items-start gap-2">
+                  <span className="w-5 h-5 bg-[#C65A2E]/10 text-[#C65A2E] rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 mt-0.5">1</span>
+                  <span>Print or display this QR code on each table.</span>
+                </div>
+                <div className="flex items-start gap-2">
+                  <span className="w-5 h-5 bg-[#C65A2E]/10 text-[#C65A2E] rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 mt-0.5">2</span>
+                  <span>Customers scan it, browse the menu, and tap <strong>Place Order</strong>.</span>
+                </div>
+                <div className="flex items-start gap-2">
+                  <span className="w-5 h-5 bg-[#C65A2E]/10 text-[#C65A2E] rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 mt-0.5">3</span>
+                  <span>The order appears instantly in your POS active orders.</span>
+                </div>
+              </div>
+
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-700">
+                <strong>Tip:</strong> Requires the app to be running and the customer's phone to be on the same WiFi network.
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="flex items-center gap-3 text-zinc-400 text-sm py-4">
+            <div className="w-2 h-2 bg-zinc-300 rounded-full animate-pulse" />
+            Detecting local IP address…
           </div>
         )}
       </div>
